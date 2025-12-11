@@ -1,60 +1,65 @@
 # MCP Protocol Mastery
 
-Technical implementation guide for the Model Context Protocol (MCP) - the open standard for connecting AI assistants to external tools, data sources, and services.
+> Build once, connect everywhere. The complete guide to Model Context Protocol.
 
-## What is MCP?
+## What You'll Learn
 
-MCP is a protocol that standardizes how AI applications (hosts) connect to external capabilities (servers). Think of it as USB-C for AI - a universal connector.
+This course takes you from "what is MCP?" to building production-ready servers that work with Claude Desktop, VS Code, and any MCP-compatible AI application.
 
-```
-┌─────────────────┐         ┌─────────────────┐
-│   AI HOST       │         │   MCP SERVER    │
-│  (Claude, etc)  │◄───────►│  (Your tools)   │
-│                 │   MCP   │                 │
-│  - LLM         │         │  - Tools        │
-│  - MCP Client  │         │  - Resources    │
-│                 │         │  - Prompts      │
-└─────────────────┘         └─────────────────┘
-```
+**By the end, you'll be able to:**
+- Build MCP servers that expose tools, resources, and prompts
+- Connect servers to Claude Desktop and other hosts
+- Implement security best practices
+- Debug protocol issues
+- Deploy servers locally and remotely
 
-## Why MCP Matters
+## Prerequisites
 
-| Before MCP | With MCP |
-|------------|----------|
-| Custom integration per AI app | One server, all compatible hosts |
-| Vendor lock-in | Open standard |
-| Security varies wildly | Standardized security model |
-| No capability discovery | Agent Cards, tool schemas |
+- TypeScript or Python experience
+- Familiarity with async/await
+- A text editor and terminal
+
+**Not required:** Prior MCP knowledge, Claude API experience
 
 ## Learning Path
 
-### Foundations
-- [Core Concepts](./foundations/01-core-concepts.md) - Hosts, clients, servers, primitives
-- [Architecture](./01-architecture/README.md) - Protocol structure, lifecycle, messages
+### Start Here
 
-### Building Servers
-- [Server Basics](./02-servers/01-basics.md) - Your first MCP server
-- [Tools](./04-tools-resources/01-tools.md) - Exposing functions to AI
-- [Resources](./04-tools-resources/02-resources.md) - Exposing data to AI
-- [Prompts](./02-servers/03-prompts.md) - Reusable prompt templates
+| Module | What You'll Learn | Time |
+|--------|------------------|------|
+| **[What is MCP?](./foundations/01-core-concepts.md)** | The problem MCP solves, hosts/clients/servers, the three primitives | 15 min |
+| **[Architecture](./01-architecture/README.md)** | Protocol lifecycle, JSON-RPC messages, capability negotiation | 20 min |
 
-### Building Clients
-- [Client Basics](./03-clients/01-basics.md) - Connecting to MCP servers
-- [Host Integration](./03-clients/02-host-integration.md) - Embedding in AI apps
+### Building Servers (Core Path)
+
+| Module | What You'll Learn | Time |
+|--------|------------------|------|
+| **[Server Basics](./02-servers/01-basics.md)** | Your first server, testing with Claude Desktop, error handling | 30 min |
+| **[Tools Deep Dive](./04-tools-resources/01-tools.md)** | Parameter validation, security, returning results | 25 min |
+| **[Production Patterns](./07-patterns/README.md)** | Error handling, chunking, confirmations, anti-patterns | 20 min |
+
+### Building Clients (If Needed)
+
+| Module | What You'll Learn | Time |
+|--------|------------------|------|
+| **[Client Basics](./03-clients/README.md)** | When to build a client, managing servers, LLM integration | 25 min |
 
 ### Advanced Topics
-- [Transports](./05-transports/README.md) - stdio, SSE, custom
-- [Security](./06-security/README.md) - Auth, validation, sandboxing
-- [Patterns](./07-patterns/README.md) - Production patterns
 
-### Labs
-- [Lab 01](./labs/01-filesystem-server/) - Build a filesystem MCP server
-- [Lab 02](./labs/02-database-server/) - Build a database MCP server
-- [Lab 03](./labs/03-api-wrapper/) - Wrap any REST API as MCP
+| Module | What You'll Learn | Time |
+|--------|------------------|------|
+| **[Transports](./05-transports/README.md)** | stdio, SSE, WebSocket, custom transports | 20 min |
+| **[Security](./06-security/README.md)** | Path traversal, input validation, rate limiting | 25 min |
+
+### Hands-On Labs
+
+| Lab | What You'll Build |
+|-----|------------------|
+| **[Filesystem Server](./labs/01-filesystem-server/)** | Complete server with read, write, search, list tools |
 
 ## Quick Start
 
-### Install an MCP Server (Claude Desktop)
+### Option 1: Use an existing server
 
 ```json
 // ~/Library/Application Support/Claude/claude_desktop_config.json
@@ -62,76 +67,87 @@ MCP is a protocol that standardizes how AI applications (hosts) connect to exter
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/projects"]
     }
   }
 }
 ```
 
-### Build Your First Server (TypeScript)
+Restart Claude Desktop. Ask: *"What files are in my projects directory?"*
+
+### Option 2: Build your own (5 minutes)
 
 ```typescript
+// hello-server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
-const server = new McpServer({
-  name: "my-first-server",
-  version: "1.0.0"
-});
+const server = new McpServer({ name: "hello", version: "1.0.0" });
 
-// Add a tool
-server.tool("greet", { name: { type: "string" } }, async ({ name }) => ({
-  content: [{ type: "text", text: `Hello, ${name}!` }]
-}));
+server.tool(
+  "greet",
+  "Say hello to someone",
+  { name: z.string() },
+  async ({ name }) => ({
+    content: [{ type: "text", text: `Hello, ${name}!` }]
+  })
+);
 
-// Start server
-const transport = new StdioServerTransport();
-await server.connect(transport);
+await server.connect(new StdioServerTransport());
 ```
 
-### Build Your First Server (Python)
+→ Full walkthrough in **[Server Basics](./02-servers/01-basics.md)**
 
-```python
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
+## How MCP Works (30-Second Version)
 
-server = Server("my-first-server")
-
-@server.tool()
-async def greet(name: str) -> str:
-    """Greet someone by name"""
-    return f"Hello, {name}!"
-
-async def main():
-    async with stdio_server() as (read, write):
-        await server.run(read, write)
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+```
+┌──────────────────┐                    ┌──────────────────┐
+│  CLAUDE DESKTOP  │                    │   YOUR SERVER    │
+│                  │                    │                  │
+│  "Search for     │  ── tools/call ──► │  search_files()  │
+│   .ts files"     │                    │                  │
+│                  │  ◄── results ────  │  ["a.ts","b.ts"] │
+│  "Found 2 files" │                    │                  │
+└──────────────────┘                    └──────────────────┘
+        │                                        │
+        └─────────── MCP Protocol ───────────────┘
 ```
 
-## Protocol Version
+1. **You build a server** that exposes tools (functions the AI can call)
+2. **Claude Desktop connects** to your server via MCP
+3. **When the user asks** for something, Claude decides which tools to use
+4. **Your server executes** the tool and returns results
+5. **Claude responds** to the user with the information
 
-Current: **2025-11-25** (date-based versioning)
+## Common Questions
 
-## Prerequisites
+**Q: Do I need MCP to use Claude?**
+No. MCP extends what Claude can do. Claude works fine without it.
 
-- TypeScript/Python experience
-- Familiarity with JSON-RPC
-- Understanding of async/await patterns
+**Q: Is MCP only for Anthropic products?**
+No. MCP is an open standard. VS Code extensions, custom apps, and other AI assistants can use it.
 
-## Related Protocols
+**Q: Can I use Python?**
+Yes. Both TypeScript and Python SDKs are fully supported.
 
-| Protocol | Purpose | Status |
-|----------|---------|--------|
-| **MCP** | Tool/resource connectivity | Production |
-| **A2A** | Agent-to-agent communication | Production |
-| **AP2** | Agent payment authorization | Developer Preview |
+**Q: Where do MCP servers run?**
+Most run locally as subprocesses. You can also deploy them as HTTP services.
 
 ## Resources
 
-- [Official Spec](https://modelcontextprotocol.io/specification)
-- [TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Python SDK](https://github.com/modelcontextprotocol/python-sdk)
-- [Server Registry](https://github.com/modelcontextprotocol/servers)
+- **[Official Specification](https://modelcontextprotocol.io/specification)** - The authoritative reference
+- **[TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)** - Build servers in TypeScript
+- **[Python SDK](https://github.com/modelcontextprotocol/python-sdk)** - Build servers in Python
+- **[Server Registry](https://github.com/modelcontextprotocol/servers)** - Community-built servers
+
+## Related Protocols
+
+| Protocol | Purpose | Relationship to MCP |
+|----------|---------|---------------------|
+| **A2A** | Agent-to-agent communication | Complements MCP (agent interop) |
+| **AP2** | Agent payment authorization | Extends MCP/A2A for payments |
+
+---
+
+**Ready to start?** → **[What is MCP?](./foundations/01-core-concepts.md)**

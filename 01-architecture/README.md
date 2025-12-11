@@ -1,25 +1,77 @@
-# MCP Architecture
+# Module 01: Architecture
 
-## Protocol Stack
+> Understanding how MCP messages flow between clients and servers
+
+## Learning Objectives
+
+By the end of this module, you'll understand:
+- The connection lifecycle (connect → initialize → ready → shutdown)
+- JSON-RPC message format
+- Capability negotiation
+- How clients discover what servers can do
+- Error handling patterns
+
+## The Connection Lifecycle
+
+Every MCP session follows this sequence:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      APPLICATION LAYER                          │
-│  Tools, Resources, Prompts, Sampling                            │
-├─────────────────────────────────────────────────────────────────┤
-│                      MESSAGE LAYER                              │
-│  JSON-RPC 2.0 Messages                                          │
-├─────────────────────────────────────────────────────────────────┤
-│                      TRANSPORT LAYER                            │
-│  stdio, SSE, Custom                                             │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                        CONNECTION LIFECYCLE                             │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. SPAWN        Host starts server as subprocess (or connects via HTTP)│
+│       │                                                                 │
+│       ▼                                                                 │
+│  2. INITIALIZE   "Hello, I'm client X, I support these capabilities"   │
+│       │          "Hello, I'm server Y, I offer these capabilities"     │
+│       ▼                                                                 │
+│  3. READY        Normal operation: tool calls, resource reads, etc.    │
+│       │                                                                 │
+│       ▼                                                                 │
+│  4. SHUTDOWN     Graceful termination                                   │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Message Format
+### Why Initialization Matters
 
-MCP uses JSON-RPC 2.0 for all communication.
+Initialization isn't just "hello" - it's where both sides negotiate what they can do:
 
-### Request
+```typescript
+// Client says: "I support roots and sampling"
+{
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-11-25",
+    "clientInfo": { "name": "my-app", "version": "1.0" },
+    "capabilities": {
+      "roots": { "listChanged": true },
+      "sampling": {}
+    }
+  }
+}
+
+// Server responds: "I offer tools and resources"
+{
+  "result": {
+    "protocolVersion": "2025-11-25",
+    "serverInfo": { "name": "my-server", "version": "1.0" },
+    "capabilities": {
+      "tools": { "listChanged": true },
+      "resources": { "subscribe": true }
+    }
+  }
+}
+```
+
+**Key insight:** If a server declares `tools: {}`, the client knows it can call `tools/list` and `tools/call`. If not declared, those methods won't work.
+
+## Message Format: JSON-RPC 2.0
+
+All MCP messages use JSON-RPC 2.0. There are three types:
+
+### 1. Requests (expect a response)
 
 ```json
 {
@@ -28,31 +80,39 @@ MCP uses JSON-RPC 2.0 for all communication.
   "method": "tools/call",
   "params": {
     "name": "read_file",
-    "arguments": {
-      "path": "/src/index.ts"
-    }
+    "arguments": { "path": "/src/index.ts" }
   }
 }
 ```
 
-### Response
+The `id` field is crucial - it's how you match responses to requests.
+
+### 2. Responses (answer to a request)
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "file contents here..."
-      }
-    ]
+    "content": [{ "type": "text", "text": "file contents..." }]
   }
 }
 ```
 
-### Notification (no response expected)
+Or if something went wrong:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32602,
+    "message": "File not found: /src/index.ts"
+  }
+}
+```
+
+### 3. Notifications (no response expected)
 
 ```json
 {
@@ -61,163 +121,126 @@ MCP uses JSON-RPC 2.0 for all communication.
 }
 ```
 
-### Error
+Notice: no `id` field. The server is just informing the client; it doesn't expect a reply.
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "error": {
-    "code": -32600,
-    "message": "Invalid Request",
-    "data": { "details": "..." }
-  }
-}
-```
+## The Methods You Need to Know
 
-## Connection Lifecycle
+### For Tools
 
-```
-┌──────────┐                              ┌──────────┐
-│  CLIENT  │                              │  SERVER  │
-└────┬─────┘                              └────┬─────┘
-     │                                         │
-     │  ──────── initialize ─────────────────► │
-     │           {protocolVersion,             │
-     │            capabilities,                │
-     │            clientInfo}                  │
-     │                                         │
-     │  ◄─────── initialize result ────────── │
-     │           {protocolVersion,             │
-     │            capabilities,                │
-     │            serverInfo}                  │
-     │                                         │
-     │  ──────── initialized ────────────────► │
-     │           (notification)                │
-     │                                         │
-     │  ═══════ SESSION ACTIVE ═══════════════ │
-     │                                         │
-     │  ──────── tools/list ─────────────────► │
-     │  ◄─────── tools list ──────────────────│
-     │                                         │
-     │  ──────── tools/call ─────────────────► │
-     │  ◄─────── tool result ─────────────────│
-     │                                         │
-     │  ──────── shutdown ───────────────────► │
-     │  ◄─────── shutdown ack ────────────────│
-     │                                         │
-```
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `tools/list` | Client → Server | "What tools do you have?" |
+| `tools/call` | Client → Server | "Run this tool with these arguments" |
+| `notifications/tools/list_changed` | Server → Client | "My tools changed, re-fetch the list" |
 
-## Method Reference
+### For Resources
 
-### Initialization
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `resources/list` | Client → Server | "What resources do you have?" |
+| `resources/read` | Client → Server | "Give me the content of this resource" |
+| `resources/subscribe` | Client → Server | "Notify me when this resource changes" |
+| `notifications/resources/updated` | Server → Client | "This resource changed" |
 
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `initialize` | Client → Server | Start session, negotiate capabilities |
-| `initialized` | Client → Server | Confirm initialization complete |
+### For Prompts
 
-### Tools
-
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `tools/list` | Client → Server | List available tools |
-| `tools/call` | Client → Server | Invoke a tool |
-
-### Resources
-
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `resources/list` | Client → Server | List available resources |
-| `resources/read` | Client → Server | Read resource content |
-| `resources/subscribe` | Client → Server | Subscribe to resource changes |
-| `resources/unsubscribe` | Client → Server | Unsubscribe from resource |
-
-### Prompts
-
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `prompts/list` | Client → Server | List available prompts |
-| `prompts/get` | Client → Server | Get prompt content |
-
-### Sampling (Server → Client)
-
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `sampling/createMessage` | Server → Client | Request LLM completion |
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `prompts/list` | Client → Server | "What prompts do you have?" |
+| `prompts/get` | Client → Server | "Give me this prompt with these arguments" |
 
 ### Utilities
 
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `ping` | Either | Health check |
-| `logging/setLevel` | Client → Server | Set log verbosity |
-| `completion/complete` | Client → Server | Request completions |
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `ping` | Either | "Are you there?" |
+| `notifications/progress` | Either | "Here's progress on that long operation" |
+| `notifications/cancelled` | Either | "That operation was cancelled" |
 
-### Notifications
+## Capability Negotiation in Practice
 
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `notifications/tools/list_changed` | Server → Client | Tools changed |
-| `notifications/resources/list_changed` | Server → Client | Resources changed |
-| `notifications/resources/updated` | Server → Client | Resource content changed |
-| `notifications/prompts/list_changed` | Server → Client | Prompts changed |
-| `notifications/progress` | Either | Progress update |
-| `notifications/cancelled` | Either | Operation cancelled |
+Let's trace through a real scenario:
 
-## Capability Negotiation
+**Scenario:** Claude Desktop connects to a filesystem server
 
-### Client Capabilities
-
-```typescript
-interface ClientCapabilities {
-  // Client can handle root changes
-  roots?: {
-    listChanged?: boolean;
-  };
-
-  // Client can perform LLM sampling
-  sampling?: {};
-
-  // Experimental features
-  experimental?: Record<string, object>;
-}
 ```
+1. Desktop starts server:
+   $ node /path/to/filesystem-server.js /allowed/directory
 
-### Server Capabilities
+2. Desktop sends initialize:
+   {
+     "capabilities": {
+       "roots": { "listChanged": true }
+     }
+   }
 
-```typescript
-interface ServerCapabilities {
-  // Server provides tools
-  tools?: {
-    listChanged?: boolean;  // Can notify of changes
-  };
+3. Server responds:
+   {
+     "capabilities": {
+       "tools": { "listChanged": true },
+       "resources": { "subscribe": true }
+     }
+   }
 
-  // Server provides resources
-  resources?: {
-    subscribe?: boolean;    // Supports subscriptions
-    listChanged?: boolean;  // Can notify of changes
-  };
+4. Desktop now knows:
+   - ✅ Can call tools/list, tools/call
+   - ✅ Can call resources/list, resources/read, resources/subscribe
+   - ❌ Cannot call prompts/list (server didn't declare prompts)
 
-  // Server provides prompts
-  prompts?: {
-    listChanged?: boolean;  // Can notify of changes
-  };
+5. Desktop fetches available tools:
+   tools/list → ["read_file", "write_file", "search_files"]
 
-  // Server supports logging
-  logging?: {};
+6. Desktop tells the LLM:
+   "You have these tools available: read_file, write_file, search_files"
 
-  // Experimental features
-  experimental?: Record<string, object>;
-}
+7. User asks: "What's in my config file?"
+
+8. LLM decides to use read_file tool
+
+9. Desktop calls:
+   tools/call { name: "read_file", arguments: { path: "config.json" }}
+
+10. Server returns file contents
+
+11. LLM formulates response for user
 ```
 
 ## Error Codes
 
-| Code | Name | Description |
-|------|------|-------------|
+When things go wrong, you'll see these codes:
+
+| Code | Name | Meaning |
+|------|------|---------|
 | -32700 | Parse error | Invalid JSON |
-| -32600 | Invalid Request | Not valid JSON-RPC |
-| -32601 | Method not found | Unknown method |
-| -32602 | Invalid params | Invalid method parameters |
-| -32603 | Internal error | Server error |
+| -32600 | Invalid request | Not valid JSON-RPC |
+| -32601 | Method not found | Server doesn't support this method |
+| -32602 | Invalid params | Wrong arguments for the method |
+| -32603 | Internal error | Server crashed or had a bug |
+
+**Pro tip:** Always handle errors gracefully. The LLM can often recover if you return a clear error message instead of crashing.
+
+## Common Gotchas
+
+1. **Forgetting to send `initialized` notification** - After receiving the initialize result, clients must send an `initialized` notification. Without it, some servers won't start processing requests.
+
+2. **Not checking capabilities** - Don't call `resources/subscribe` if the server didn't declare `resources: { subscribe: true }`.
+
+3. **Ignoring `listChanged` notifications** - If a server adds new tools at runtime, you'll miss them unless you handle `notifications/tools/list_changed`.
+
+4. **Mismatched IDs** - Every request needs a unique ID. If you reuse IDs, responses get mixed up.
+
+## Exercises
+
+1. **Trace the flow** - Start Claude Desktop with an MCP server, enable debug logging, and trace the initialize handshake.
+
+2. **Handle capabilities** - Write code that checks server capabilities before making calls.
+
+3. **Build a mock** - Create a minimal mock server that responds to `tools/list` and `tools/call`.
+
+## Next Steps
+
+Now that you understand the architecture:
+
+→ **[Building Servers](../02-servers/01-basics.md)** - Create your first MCP server
+
+→ **[Tools Deep Dive](../04-tools-resources/01-tools.md)** - Master tool definitions and validation
