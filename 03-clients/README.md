@@ -1,291 +1,344 @@
-# Building MCP Clients
+# Module 03: Building Clients
 
-## When to Build a Client
+> Connect your AI application to MCP servers
 
-Build an MCP client when you're creating an AI application (host) that needs to connect to MCP servers.
+## Learning Objectives
 
-**You need a client if you're building:**
-- Custom AI assistant application
-- IDE extension with AI features
-- Automation tool that uses LLMs
-- Agent framework
+By the end of this module, you'll understand:
+- When you need to build an MCP client (vs just using one)
+- How to connect to and manage multiple servers
+- Integrating MCP tools with your LLM
+- Handling server lifecycle and errors
 
-**You don't need a client if you're:**
-- Building an MCP server (servers don't need client code)
-- Using Claude Desktop or another host (they have built-in clients)
+## Do You Need to Build a Client?
 
-## Client Architecture
+Most developers **don't** need to build an MCP client. Here's how to decide:
+
+### You DON'T need a client if:
+
+- ✅ You're building an MCP **server** (servers don't contain clients)
+- ✅ You're using Claude Desktop, VS Code, or another existing host
+- ✅ You just want to give Claude access to your tools
+
+### You DO need a client if:
+
+- You're building a **custom AI application** (your own "Claude Desktop")
+- You're creating an **IDE extension** with AI features
+- You're building an **agent framework** that needs tool access
+- You want to **embed MCP** in your product
+
+**Still not sure?** If you're reading this to "connect Claude to my database," you want [Building Servers](../02-servers/01-basics.md), not this module.
+
+## The Client's Job
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         YOUR HOST APP                            │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                       MCP CLIENT                         │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
-│  │  │ Connection  │  │  Request    │  │ Capability  │      │    │
-│  │  │ Manager     │  │  Router     │  │ Tracker     │      │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│         │                   │                   │                │
-└─────────┼───────────────────┼───────────────────┼────────────────┘
-          │                   │                   │
-          ▼                   ▼                   ▼
-    ┌──────────┐       ┌──────────┐       ┌──────────┐
-    │ Server A │       │ Server B │       │ Server C │
-    └──────────┘       └──────────┘       └──────────┘
+│                     YOUR AI APPLICATION                          │
+│                                                                  │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐        │
+│  │    LLM      │ ◄──►│ MCP CLIENT  │ ◄──►│   SERVERS   │        │
+│  │  (Claude)   │     │  (you build │     │ (filesystem,│        │
+│  │             │     │   this)     │     │  database)  │        │
+│  └─────────────┘     └─────────────┘     └─────────────┘        │
+│                                                                  │
+│  The client:                                                     │
+│  1. Connects to servers                                          │
+│  2. Discovers their tools                                        │
+│  3. Formats tools for the LLM                                    │
+│  4. Routes LLM tool calls to the right server                   │
+│  5. Returns results to the LLM                                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## TypeScript Client
+## Basic Client Setup
 
-### Basic Setup
+### TypeScript
 
 ```typescript
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 async function createClient() {
-  const client = new Client({
-    name: "my-host-app",
-    version: "1.0.0",
-  }, {
-    capabilities: {
-      roots: { listChanged: true },
-      sampling: {},
+  // 1. Create client instance
+  const client = new Client(
+    {
+      name: "my-ai-app",
+      version: "1.0.0",
     },
-  });
+    {
+      capabilities: {
+        // What your client supports
+        roots: { listChanged: true },  // Can handle workspace roots
+        sampling: {},                   // Can do LLM completions for servers
+      },
+    }
+  );
 
-  // Connect to server via stdio
+  // 2. Create transport (how to talk to the server)
   const transport = new StdioClientTransport({
     command: "node",
-    args: ["/path/to/mcp-server/dist/index.js"],
+    args: ["/path/to/mcp-server/index.js"],
     env: {
-      API_KEY: process.env.API_KEY,
+      API_KEY: process.env.API_KEY,  // Pass secrets via env
     },
   });
 
+  // 3. Connect
   await client.connect(transport);
+
+  // 4. Now you can use it
+  const { tools } = await client.listTools();
+  console.log("Available tools:", tools.map(t => t.name));
 
   return client;
 }
 ```
 
-### Listing Capabilities
+### Python
+
+```python
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client
+
+async def create_client():
+    # Connect to server
+    async with stdio_client(
+        command="python",
+        args=["/path/to/server.py"]
+    ) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize connection
+            await session.initialize()
+
+            # Discover tools
+            tools = await session.list_tools()
+            print(f"Available: {[t.name for t in tools.tools]}")
+
+            return session
+```
+
+## Discovering Server Capabilities
+
+After connecting, find out what the server offers:
 
 ```typescript
 async function discoverCapabilities(client: Client) {
-  // List available tools
+  // What tools are available?
   const { tools } = await client.listTools();
-  console.log("Available tools:", tools.map(t => t.name));
+  console.log("Tools:", tools.map(t => ({
+    name: t.name,
+    description: t.description,
+  })));
 
-  // List available resources
+  // What resources?
   const { resources } = await client.listResources();
-  console.log("Available resources:", resources.map(r => r.uri));
+  console.log("Resources:", resources.map(r => r.uri));
 
-  // List available prompts
+  // What prompts?
   const { prompts } = await client.listPrompts();
-  console.log("Available prompts:", prompts.map(p => p.name));
+  console.log("Prompts:", prompts.map(p => p.name));
 }
 ```
 
-### Calling Tools
+## Calling Tools
+
+When your LLM decides to use a tool:
 
 ```typescript
-async function callTool(client: Client, name: string, args: object) {
+async function callTool(client: Client, name: string, args: Record<string, unknown>) {
   try {
     const result = await client.callTool({
       name,
       arguments: args,
     });
 
+    // Check if it's an error result
     if (result.isError) {
-      console.error("Tool error:", result.content);
-      return null;
+      console.error("Tool returned error:", result.content);
+      return { success: false, error: result.content };
     }
 
-    return result.content;
+    return { success: true, content: result.content };
   } catch (error) {
-    console.error("Call failed:", error);
+    // Connection or protocol error
+    console.error("Tool call failed:", error);
     throw error;
   }
 }
 
 // Usage
-const files = await callTool(client, "search_files", {
+const result = await callTool(client, "search_files", {
   pattern: "**/*.ts",
-  path: "/src",
+  directory: "/src",
 });
 ```
 
-### Reading Resources
-
-```typescript
-async function readResource(client: Client, uri: string) {
-  const { contents } = await client.readResource({ uri });
-
-  return contents.map(c => ({
-    uri: c.uri,
-    mimeType: c.mimeType,
-    content: c.text ?? c.blob,
-  }));
-}
-
-// Usage
-const config = await readResource(client, "file:///config.json");
-```
-
-### Subscribing to Resource Changes
-
-```typescript
-async function watchResource(client: Client, uri: string) {
-  // Subscribe
-  await client.subscribeResource({ uri });
-
-  // Handle updates
-  client.setNotificationHandler(
-    "notifications/resources/updated",
-    async (notification) => {
-      if (notification.params.uri === uri) {
-        console.log("Resource updated:", uri);
-        const newContent = await readResource(client, uri);
-        // Handle update...
-      }
-    }
-  );
-}
-```
-
-## Python Client
-
-```python
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client
-
-async def main():
-    async with stdio_client(
-        command="python",
-        args=["/path/to/server.py"]
-    ) as (read, write):
-        async with ClientSession(read, write) as session:
-            # Initialize
-            await session.initialize()
-
-            # List tools
-            tools = await session.list_tools()
-            print(f"Available tools: {[t.name for t in tools.tools]}")
-
-            # Call tool
-            result = await session.call_tool(
-                name="search_files",
-                arguments={"pattern": "*.py"}
-            )
-            print(f"Result: {result}")
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
-```
-
 ## Managing Multiple Servers
+
+Real applications often connect to multiple servers:
 
 ```typescript
 class MCPManager {
   private clients = new Map<string, Client>();
 
-  async addServer(name: string, config: ServerConfig) {
-    const client = new Client({ name: "host", version: "1.0.0" });
-    const transport = new StdioClientTransport(config);
+  async addServer(name: string, command: string, args: string[]) {
+    const client = new Client({ name: "my-app", version: "1.0.0" });
+    const transport = new StdioClientTransport({ command, args });
+
     await client.connect(transport);
     this.clients.set(name, client);
+
+    console.log(`Connected to ${name}`);
   }
 
-  async callTool(serverName: string, tool: string, args: object) {
-    const client = this.clients.get(serverName);
-    if (!client) throw new Error(`Server not found: ${serverName}`);
-    return client.callTool({ name: tool, arguments: args });
-  }
-
-  // Aggregate tools from all servers
-  async listAllTools() {
+  // Get all tools from all servers
+  async getAllTools() {
     const allTools = [];
-    for (const [server, client] of this.clients) {
+
+    for (const [serverName, client] of this.clients) {
       const { tools } = await client.listTools();
-      allTools.push(...tools.map(t => ({ ...t, server })));
+
+      // Tag each tool with its server
+      for (const tool of tools) {
+        allTools.push({
+          ...tool,
+          _server: serverName,  // So we know where to route calls
+        });
+      }
     }
+
     return allTools;
   }
 
+  // Route a tool call to the right server
+  async callTool(serverName: string, toolName: string, args: object) {
+    const client = this.clients.get(serverName);
+    if (!client) {
+      throw new Error(`Unknown server: ${serverName}`);
+    }
+
+    return client.callTool({ name: toolName, arguments: args });
+  }
+
+  // Clean shutdown
   async shutdown() {
-    for (const client of this.clients.values()) {
+    for (const [name, client] of this.clients) {
+      console.log(`Disconnecting ${name}...`);
       await client.close();
     }
+    this.clients.clear();
   }
 }
+
+// Usage
+const manager = new MCPManager();
+await manager.addServer("files", "node", ["/path/to/filesystem-server.js"]);
+await manager.addServer("db", "python", ["/path/to/database-server.py"]);
+
+const tools = await manager.getAllTools();
+// Now you have tools from both servers
 ```
 
-## Integrating with LLMs
+## Integrating with Your LLM
+
+Here's how to wire MCP tools into an LLM conversation:
 
 ```typescript
-async function runAgentLoop(client: Client, llm: LLM) {
-  // Get available tools for LLM
-  const { tools } = await client.listTools();
+async function runConversation(manager: MCPManager, userMessage: string) {
+  // 1. Get all available tools
+  const mcpTools = await manager.getAllTools();
 
-  // Format tools for LLM
-  const toolSchemas = tools.map(t => ({
-    name: t.name,
-    description: t.description,
-    parameters: t.inputSchema,
+  // 2. Format tools for the LLM (Claude format shown)
+  const llmTools = mcpTools.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+    _server: tool._server,  // Keep track of which server
   }));
 
-  // Agent loop
-  while (true) {
-    const response = await llm.chat({
-      messages: conversation,
-      tools: toolSchemas,
-    });
+  // 3. Call the LLM
+  const response = await claude.messages.create({
+    model: "claude-sonnet-4-20250514",
+    messages: [{ role: "user", content: userMessage }],
+    tools: llmTools,
+  });
 
-    if (response.toolCalls) {
-      for (const call of response.toolCalls) {
-        const result = await client.callTool({
-          name: call.name,
-          arguments: call.arguments,
-        });
+  // 4. Handle tool calls
+  for (const block of response.content) {
+    if (block.type === "tool_use") {
+      // Find which server has this tool
+      const tool = llmTools.find(t => t.name === block.name);
+      if (!tool) continue;
 
-        conversation.push({
-          role: "tool",
-          toolCallId: call.id,
-          content: result.content,
-        });
-      }
-    } else {
-      // No tool calls, response complete
-      break;
+      // Call the tool via MCP
+      const result = await manager.callTool(
+        tool._server,
+        block.name,
+        block.input
+      );
+
+      // Feed result back to LLM for next turn
+      // ... (continue conversation with tool result)
     }
   }
 }
 ```
 
-## Error Handling
+## Handling Server Lifecycle
+
+Servers can crash, restart, or change their capabilities:
 
 ```typescript
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+// Handle disconnections
+client.onclose = () => {
+  console.error("Server disconnected!");
+  // Attempt reconnection or notify user
+};
 
-async function safeToolCall(client: Client, name: string, args: object) {
-  try {
-    return await client.callTool({ name, arguments: args });
-  } catch (error) {
-    if (error instanceof McpError) {
-      switch (error.code) {
-        case ErrorCode.MethodNotFound:
-          console.error(`Tool not found: ${name}`);
-          break;
-        case ErrorCode.InvalidParams:
-          console.error(`Invalid parameters for ${name}`);
-          break;
-        default:
-          console.error(`MCP error: ${error.message}`);
-      }
-    }
-    throw error;
+// Handle errors
+client.onerror = (error) => {
+  console.error("Server error:", error);
+};
+
+// Handle capability changes
+client.setNotificationHandler(
+  "notifications/tools/list_changed",
+  async () => {
+    console.log("Server tools changed, refreshing...");
+    const { tools } = await client.listTools();
+    // Update your tool cache
   }
-}
+);
 ```
+
+## Common Gotchas
+
+1. **Forgetting to initialize** - Call `connect()` before making any requests
+
+2. **Not handling disconnections** - Servers can crash; always have reconnection logic
+
+3. **Ignoring `listChanged` notifications** - If a server adds tools at runtime, you'll miss them
+
+4. **Mixing up servers** - When managing multiple servers, track which tools come from where
+
+5. **Blocking on tool calls** - Tool calls can be slow; consider timeouts and cancellation
+
+6. **Leaking connections** - Always call `close()` when done; servers are processes that need cleanup
+
+## Exercises
+
+1. **Single Server** - Connect to the filesystem server and list its tools
+
+2. **Multi-Server** - Build a manager that connects to 2+ servers simultaneously
+
+3. **LLM Integration** - Wire up tools to Claude and handle a multi-turn conversation
+
+4. **Resilience** - Add reconnection logic that handles server crashes
+
+## Next Steps
+
+Now that you can build clients:
+
+→ **[Transports](../05-transports/README.md)** - Connect to remote servers via HTTP/SSE
+
+→ **[Security](../06-security/README.md)** - Secure your client-server communication
