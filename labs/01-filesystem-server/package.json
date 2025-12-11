@@ -1,0 +1,28 @@
+{
+  "name": "filesystem-mcp-server-lab",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Lab: Build a filesystem MCP server",
+  "main": "dist/index.js",
+  "bin": {
+    "filesystem-mcp-server": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:solution": "node dist/solution.js",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "glob": "^10.3.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
